@@ -5,8 +5,10 @@ import { showNotification } from './ui';
 const STORAGE_KEY = 'ytaf-playback-speed';
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 
-// Safety valve in case the app keeps resetting the rate and we keep fighting it.
-const MAX_REAPPLY_PER_SECOND = 10;
+const nativeRateDescriptor = Object.getOwnPropertyDescriptor(
+  HTMLMediaElement.prototype,
+  'playbackRate'
+);
 
 const playerManager = await getPlayerManager();
 
@@ -21,51 +23,64 @@ function loadSpeed(): number {
 }
 
 let desiredRate = loadSpeed();
-let reapplyCount = 0;
-let reapplyWindowStart = 0;
 let qualityPollToken: number | undefined;
 
 function speedEnabled() {
-  return configRead('enablePlaybackSpeed');
+  try {
+    const val = configRead('enablePlaybackSpeed');
+    return val !== undefined ? Boolean(val) : true;
+  } catch {
+    return true;
+  }
 }
 
 function keepQuality() {
-  return configRead('keepQualityOnSpeed');
+  try {
+    return Boolean(configRead('keepQualityOnSpeed'));
+  } catch {
+    return true;
+  }
+}
+
+function getVideos(): HTMLVideoElement[] {
+  return Array.from(document.querySelectorAll('video'));
 }
 
 function getVideo(): HTMLVideoElement | null {
-  return document.querySelector('video');
-}
-
-function canControl() {
+  const videos = getVideos();
   return (
-    speedEnabled() &&
-    getVideo() !== null &&
-    playerManager.playerMode === PlayerMode.NORMAL
+    videos.find((v) => !v.paused && v.readyState > 2) ||
+    videos.find((v) => v.src && v.src.length > 0) ||
+    videos[0] ||
+    null
   );
 }
 
-function getMaxQualityLabel() {
-  return playerManager.player.getAvailableQualityData()[0]?.qualityLabel;
+function canControl() {
+  return speedEnabled() && getVideo() !== null;
 }
 
-/**
- * The app lowers resolution when the playback rate is above 1x.
- * Pin the quality range to the maximum available while sped up.
- */
+function getMaxQualityLabel() {
+  try {
+    return playerManager.player.getAvailableQualityData()?.[0]?.qualityLabel;
+  } catch {
+    return undefined;
+  }
+}
+
 function pinQuality() {
   if (!keepQuality() || desiredRate === 1) return;
 
-  const player = playerManager.player;
-  const max = getMaxQualityLabel();
+  try {
+    const player = playerManager.player;
+    const max = getMaxQualityLabel();
+    if (!max) return;
 
-  // Quality data is empty until the first `isPlaying` state; the poll below
-  // will try again.
-  if (!max) return;
-
-  if (player.getPlaybackQualityLabel() !== max) {
-    console.debug('[playback-speed] pinning quality to', max);
-    player.setPlaybackQualityRange('highres', 'highres');
+    if (player.getPlaybackQualityLabel() !== max) {
+      player.setPlaybackQualityRange('highres', 'highres');
+    }
+  } catch {
+    // ignore if player API is not ready
   }
 }
 
@@ -87,29 +102,64 @@ function stopQualityPoll() {
   qualityPollToken = undefined;
 }
 
+function setNativeVideoRate(video: HTMLVideoElement, rate: number) {
+  try {
+    // No webOS, desativar preservesPitch acima de 2x ajuda o decodificador de áudio a não travar
+    const anyVid = video as any;
+    const preserve = rate <= 2.0;
+    if ('preservesPitch' in anyVid) anyVid.preservesPitch = preserve;
+    if ('webkitPreservesPitch' in anyVid) anyVid.webkitPreservesPitch = preserve;
+
+    if (nativeRateDescriptor && nativeRateDescriptor.set && nativeRateDescriptor.get) {
+      nativeRateDescriptor.set.call(video, rate);
+
+      // Bloqueia o YouTube de resetar o playbackRate de volta para 1x
+      if (!anyVid.__ytafSpeedHooked) {
+        Object.defineProperty(video, 'playbackRate', {
+          configurable: true,
+          get() {
+            return nativeRateDescriptor.get!.call(this);
+          },
+          set(newVal: number) {
+            const target = speedEnabled() ? desiredRate : newVal;
+            nativeRateDescriptor.set!.call(this, target);
+          }
+        });
+        anyVid.__ytafSpeedHooked = true;
+      }
+    } else {
+      video.playbackRate = rate;
+    }
+  } catch (err) {
+    console.debug('[playback-speed] setNativeVideoRate error', err);
+  }
+}
+
+function getActualVideoRate(video: HTMLVideoElement | null): number {
+  if (!video) return desiredRate;
+  try {
+    if (nativeRateDescriptor && nativeRateDescriptor.get) {
+      return Number(nativeRateDescriptor.get.call(video).toFixed(2));
+    }
+    return Number(video.playbackRate.toFixed(2));
+  } catch {
+    return desiredRate;
+  }
+}
+
 function applyRate() {
   if (!canControl()) return;
 
-  const video = getVideo();
-  if (!video) return;
+  const videos = getVideos();
+  if (videos.length === 0) return;
 
-  if (video.playbackRate !== desiredRate) {
-    const player = playerManager.player;
+  const target = speedEnabled() ? desiredRate : 1;
 
-    // Prefer the player's own API so its internal state stays consistent,
-    // then force the media element in case the call is blocked or missing.
-    try {
-      player.setPlaybackRate?.(desiredRate);
-    } catch (err) {
-      console.debug('[playback-speed] player.setPlaybackRate failed', err);
-    }
-
-    if (video.playbackRate !== desiredRate) {
-      video.playbackRate = desiredRate;
-    }
+  for (const video of videos) {
+    setNativeVideoRate(video, target);
   }
 
-  if (desiredRate !== 1) {
+  if (target !== 1) {
     pinQuality();
     startQualityPoll();
   } else {
@@ -123,38 +173,31 @@ function setSpeed(rate: number) {
   try {
     window.localStorage.setItem(STORAGE_KEY, String(rate));
   } catch {
-    // ignore, persistence is best-effort
+    // ignore
   }
 
   applyRate();
-  showNotification(`Velocidade: ${rate}x`, 2000);
+  const actual = getActualVideoRate(getVideo());
+  showNotification(`Velocidade: ${rate}x (Real: ${actual}x)`, 2000);
 }
 
 function stepSpeed(direction: 1 | -1) {
   const index = SPEEDS.indexOf(desiredRate);
+  const currentIdx = index === -1 ? SPEEDS.indexOf(1) : index;
   const next =
-    SPEEDS[Math.min(Math.max(index + direction, 0), SPEEDS.length - 1)];
+    SPEEDS[Math.min(Math.max(currentIdx + direction, 0), SPEEDS.length - 1)];
   if (next === undefined) return;
   setSpeed(next);
 }
 
-// If the app resets the rate (new video, buffering, ...), put it back.
 function handleRateChange(evt: Event) {
   if (!(evt.target instanceof HTMLVideoElement)) return;
   if (!canControl()) return;
-  if (evt.target.playbackRate === desiredRate) return;
 
-  const now = Date.now();
-  if (now - reapplyWindowStart > 1000) {
-    reapplyWindowStart = now;
-    reapplyCount = 0;
+  const current = getActualVideoRate(evt.target);
+  if (Math.abs(current - desiredRate) > 0.01) {
+    setNativeVideoRate(evt.target, desiredRate);
   }
-  if (++reapplyCount > MAX_REAPPLY_PER_SECOND) {
-    console.warn('[playback-speed] app keeps resetting the rate; giving up');
-    return;
-  }
-
-  applyRate();
 }
 
 function isOptionsPanelOpen() {
@@ -162,7 +205,7 @@ function isOptionsPanelOpen() {
   return panel !== null && panel.style.display !== 'none';
 }
 
-// Remote control colour buttons: red = slower, yellow = faster.
+// Botão Vermelho (403) = Diminui | Botão Amarelo (405 / 170) = Aumenta
 function handleKey(evt: KeyboardEvent) {
   const code = evt.keyCode || evt.charCode;
   const isRed = code === 403;
@@ -178,12 +221,14 @@ function handleKey(evt: KeyboardEvent) {
   }
 }
 
-// Media events don't bubble, so listen in the capture phase.
 document.addEventListener('ratechange', handleRateChange, true);
 document.addEventListener('loadedmetadata', applyRate, true);
+document.addEventListener('playing', applyRate, true);
 document.addEventListener('keydown', handleKey, true);
 document.addEventListener('keypress', handleKey, true);
 document.addEventListener('keyup', handleKey, true);
+
+window.setInterval(applyRate, 1000);
 
 playerManager.addEventListener('newVideo', applyRate);
 playerManager.addEventListener('playbackStart', applyRate);
