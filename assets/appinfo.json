@@ -1,9 +1,10 @@
 {
-  "id": "youtube.leanback.v4",
-  "vendor": "webosbrew.org",
+  "id": "youtube.leanback.custom",
+  "version": "0.3.2",
+  "vendor": "webosbrew",
   "type": "web",
   "main": "index.html",
-  "title": "YouTube AdFree",
+  "title": "YouTube Mod",
   "icon": "icon.png",
   "largeIcon": "largeIcon.png",
   "mediumLargeIcon": "mediumLargeIcon.png",
