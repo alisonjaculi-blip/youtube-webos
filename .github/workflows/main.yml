@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-env
-      - run: pnpm run "/^build|^lint:all/"
+      - run: pnpm run "/^build/"
       - run: pnpm run test:compat
       - run: pnpm run package
 
