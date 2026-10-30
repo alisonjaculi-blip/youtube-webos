@@ -64,6 +64,20 @@ const configOptions = new Map([
     }
   ],
   [
+    'enablePlaybackSpeed',
+    {
+      default: true,
+      desc: 'Velocidade do vídeo (vermelho = mais lento, amarelo = mais rápido)'
+    }
+  ],
+  [
+    'keepQualityOnSpeed',
+    {
+      default: true,
+      desc: 'Manter a qualidade máxima ao acelerar o vídeo'
+    }
+  ],
+  [
     'removeEndscreen',
     {
       default: false,

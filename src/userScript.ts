@@ -24,6 +24,7 @@ import './screensaver-fix';
 import './yt-fixes.css';
 import './watch.js';
 import './video-quality';
+import './playback-speed';
 import './lang-settings-fix';
 import './remove-endscreen';
 import './hooks';

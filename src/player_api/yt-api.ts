@@ -68,6 +68,9 @@ export interface YTPlayer extends HTMLElement {
 
   setPlaybackQualityRange(min: string, max: string, formatId?: string): void;
 
+  /** May be missing or blocked in the TV app. */
+  setPlaybackRate?(rate: number): void;
+
   getVideoData(): VideoData;
 
   getPlayerStateObject(): PlayerStateObject;
