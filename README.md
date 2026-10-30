@@ -199,6 +199,7 @@ pnpm run inspect
 ```sh
 pnpm run build:dev && pnpm run package && pnpm run deploy && pnpm run launch
 ```
+só o ouro
 
 To launch a specific video directly:
 
